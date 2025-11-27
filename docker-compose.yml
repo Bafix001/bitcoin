@@ -1,23 +1,35 @@
 services:
+  # Kafka Broker
   broker:
     image: apache/kafka:latest
     container_name: broker
     ports:
       - "9092:9092"
     environment:
+      CLUSTER_ID: "Xmtl87sWTPKlfGW2hhJRlA"
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - bitcoin-network
 
+
+  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     container_name: postgres-bitcoin
@@ -29,19 +41,95 @@ services:
       POSTGRES_PASSWORD: bitcoin_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bitcoin_user"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U bitcoin_user -d bitcoin_db"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
+    networks:
+      - bitcoin-network
 
+
+  # Producer - Collecte les prix des exchanges
+  producer:
+    build:
+      context: ./producer
+      dockerfile: Dockerfile
+    container_name: bitcoin-producer
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: broker:9092
+    restart: unless-stopped
+    networks:
+      - bitcoin-network
+
+
+  # Consumer - Écrit les prix en base de données
+  consumer:
+    build:
+      context: ./consumer
+      dockerfile: Dockerfile
+    container_name: bitcoin-consumer
+    depends_on:
+      broker:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: broker:9092
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: bitcoin_db
+      POSTGRES_USER: bitcoin_user
+      POSTGRES_PASSWORD: bitcoin_password
+    restart: unless-stopped
+    networks:
+      - bitcoin-network
+
+
+  # API FastAPI
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: bitcoin-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: bitcoin_db
+      POSTGRES_USER: bitcoin_user
+      POSTGRES_PASSWORD: bitcoin_password
+    restart: unless-stopped
+    networks:
+      - bitcoin-network
+
+
+  # Adminer - Interface Web pour PostgreSQL
   adminer:
     image: adminer:latest
     container_name: adminer-bitcoin
     ports:
       - "8080:8080"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    networks:
+      - bitcoin-network
+
 
 volumes:
   postgres_data:
+
+
+networks:
+  bitcoin-network:
+    driver: bridge

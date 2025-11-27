@@ -3,15 +3,17 @@ import json
 import psycopg2
 from psycopg2.extras import execute_values
 from datetime import datetime
+import os
 
 # Connexion à PostgreSQL
 conn = psycopg2.connect(
-    host="localhost",
-    port="5432",
-    database="bitcoin_db",
-    user="bitcoin_user",
-    password="bitcoin_password"
+    host=os.getenv('POSTGRES_HOST', 'localhost'),
+    port=os.getenv('POSTGRES_PORT', '5432'),
+    database=os.getenv('POSTGRES_DB', 'bitcoin_db'),
+    user=os.getenv('POSTGRES_USER', 'bitcoin_user'),
+    password=os.getenv('POSTGRES_PASSWORD', 'bitcoin_password')
 )
+
 cursor = conn.cursor()
 
 print("✅ Connecté à PostgreSQL")
@@ -19,7 +21,7 @@ print("✅ Connecté à PostgreSQL")
 # Consumer Kafka
 consumer = KafkaConsumer(
     'bitcoin-prices',
-    bootstrap_servers=['localhost:9092'],
+    bootstrap_servers=[os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')],
     auto_offset_reset='earliest',
     enable_auto_commit=True,
     group_id='bitcoin-consumer-group',
